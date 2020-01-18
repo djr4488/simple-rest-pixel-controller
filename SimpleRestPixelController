@@ -1,0 +1,179 @@
+// Simple Rest Pixel Setter
+// Tested using NodeMCU ESP8266 and WS2811 string lights
+// Dependencies:
+// * Restfully
+// * Adafruit_NeoPixel
+// * ESP8266
+// hard code the node name of the device
+const char* hostname = "hostname";
+
+// if you dont use the Captive Portal for config you must define
+// the SSID and Password of the network to connect to.
+const char* ssid = "YOUR ROUTER NAME";
+const char* password = "YOUR ROUTER PASSWORD";
+
+
+#ifdef ARDUINO_ARCH_ESP8266
+#include <ESP8266WiFi.h>
+#include <ESP8266mDNS.h>
+#include <ESP8266WebServer.h>
+#include <ESP8266HTTPClient.h>
+
+using WebServer = ESP8266WebServer;
+#else
+#include <WiFi.h>
+#include <mDNS.h>
+#include <WebServer.h>
+#include <HTTPClient.h>
+#endif
+
+#include <Restfully.h>
+#include <Adafruit_NeoPixel.h>
+
+WebServer server(80);
+RestRequestHandler restHandler;
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(50, 4, NEO_RGB + NEO_KHZ800);
+
+/*** Web Server
+*/
+void SendHeaders()
+{
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  server.sendHeader("Access-Control-Allow-Methods", "GET");
+}
+
+void handleRoot() {
+  String html = "<html><head><title>Simple Rest Pixel Controller</title>";
+  html += "</head>";
+  html += "<body>";
+  // header
+  html += "<h1>Simple Rest Pixel Controller</h1>";
+  // title area
+  html += "<div class='title'><h2><label>Site</label> ";
+  html += hostname;
+  html += "</h2></div>";
+  // ... add more here ...
+  html += "</body></html>";
+  server.send(200, "text/html", html);
+}
+
+void handleNotFound() {
+  String message = "Not Found\n\n";
+  message += "URI: ";
+  message += server.uri();
+  message += "\nMethod: ";
+  switch(server.method()) {
+    case HTTP_ANY: message += "ANY"; break;
+    case HTTP_GET: message += "GET"; break;
+    case HTTP_POST: message += "POST"; break;
+    case HTTP_PUT: message += "PUT"; break;
+    case HTTP_PATCH: message += "PATCH"; break;
+    case HTTP_DELETE: message += "DELETE"; break;
+    case HTTP_OPTIONS: message += "OPTIONS"; break;
+  }
+  message += "\nArguments: ";
+  message += server.args();
+  message += "\n";
+  for (uint8_t i = 0; i < server.args(); i++) {
+    message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
+  }
+  server.send(404, "text/plain", message);
+}
+
+/* Most browsers require a responst to OPTIONS requests or they will deny requests due to CORS policy.
+ * We simply answer all requests with the appropriate Access-Control-* headers for testing.
+*/
+class OptionsRequestHandler : public RequestHandler
+{
+    virtual bool canHandle(HTTPMethod method, String uri) {
+      return method == HTTP_OPTIONS;
+    }
+    virtual bool handle(WebServer& server, HTTPMethod requestMethod, String requestUri) {
+      SendHeaders();
+      server.send(200, "application/json; charset=utf-8", "");
+      return true;
+    }
+} optionsRequestHandler;
+
+int handleEcho(RestRequest& request) {
+  String s("Hello ");
+
+  // if we have a json body, perhaps we have a greeting parameter
+  if(request.hasJson) {
+    auto root = request.body.as<JsonObject>();  // expect request is a Json object not array
+    auto greeting = root.get<const char*>("greeting");  // NULL if this argument doesnt exist
+    if(greeting) {
+      s = greeting; // default to Hello if greeting argument wasnt supplied
+      s += ' ';
+    }
+  }
+  
+  // add the greeting name
+  auto msg = request["msg"];
+  if(msg.isString())
+    s += msg.toString();
+  else {
+    s += '#';
+    s += (long)msg;
+  }
+  request.response["reply"] = s;
+  return 200;
+}
+
+int handleLightRequest(RestRequest& request) {
+  int pixel = request["pixNum"];
+  int red = request["red"];
+  int green = request["green"];
+  int blue = request["blue"];
+  strip.setPixelColor(pixel, red, green, blue);
+  strip.show();
+  return 200;
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("SimpleRestServer");
+
+  //setup neo pixel 
+  strip.begin();
+  strip.setBrightness(50);
+  strip.show();
+
+  // have the server collect the content-type header for us
+  const char * headerkeys[] = {"Content-Type"} ;
+  size_t headerkeyssize = sizeof(headerkeys)/sizeof(char*);
+  server.collectHeaders( headerkeys, headerkeyssize );
+  server.on("/", handleRoot);
+  server.addHandler(&optionsRequestHandler);
+  server.addHandler(&restHandler);
+  server.onNotFound(handleNotFound);
+  restHandler.on("/api/echo/:msg(string|integer)")
+    .GET(handleEcho)
+    .POST(handleEcho);
+  restHandler.on("/api/light/:pixNum(integer)/set/:red(integer)/:green(integer)/:blue(integer)")
+    .GET(handleLightRequest)
+    .POST(handleLightRequest);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    Serial.println("Connection failed!  Rebooting...");
+    delay(5000);
+    ESP.restart();
+  }
+ 
+  server.begin(80);
+  Serial.print("Host: ");
+  Serial.print(hostname);
+  Serial.print("   IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+void loop() {
+
+  server.handleClient();
+
+  // no further processing if we are not in station mode
+  if(WiFi.getMode() != WIFI_STA)
+    return;
+}
