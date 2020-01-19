@@ -9,9 +9,22 @@ const char* hostname = "hostname";
 
 // if you dont use the Captive Portal for config you must define
 // the SSID and Password of the network to connect to.
-const char* ssid = "YOUR ROUTER NAME";
-const char* password = "YOUR ROUTER PASSWORD";
+const char* ssid = "YOUR ROUTER SSID";
+const char* password = "YOUR ROUTER PASSWORD ";
 
+// actions, animations, and general light setup
+const String fill = "fill";
+const String pixel = "pixel";
+const String multi = "multi";
+const int numPixels = 50;
+
+// since sending json currently over url param, still learning this stuff, need some constants to define replacement characters and such
+const String openBrace = "{";
+const String openBraceReplace = "%7B";
+const String closeBrace = "}";
+const String closeBraceReplace = "%7D";
+const String quote ="\"";
+const String quoteReplace = "%22";
 
 #ifdef ARDUINO_ARCH_ESP8266
 #include <ESP8266WiFi.h>
@@ -32,7 +45,7 @@ using WebServer = ESP8266WebServer;
 
 WebServer server(80);
 RestRequestHandler restHandler;
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(50, 4, NEO_RGB + NEO_KHZ800);
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(numPixels, 4, NEO_RGB + NEO_KHZ800);
 
 /*** Web Server
 */
@@ -102,7 +115,7 @@ int handleEcho(RestRequest& request) {
   // if we have a json body, perhaps we have a greeting parameter
   if(request.hasJson) {
     auto root = request.body.as<JsonObject>();  // expect request is a Json object not array
-    auto greeting = root.get<const char*>("greeting");  // NULL if this argument doesnt exist
+    String greeting = root["greeting"];  // NULL if this argument doesnt exist
     if(greeting) {
       s = greeting; // default to Hello if greeting argument wasnt supplied
       s += ' ';
@@ -121,15 +134,62 @@ int handleEcho(RestRequest& request) {
   return 200;
 }
 
-int handleLightRequest(RestRequest& request) {
-  int pixel = request["pixNum"];
-  int red = request["red"];
-  int green = request["green"];
-  int blue = request["blue"];
-  strip.setPixelColor(pixel, red, green, blue);
+void fillWithColor(uint32_t color) {
+  strip.fill(strip.gamma32(color), 0, 50);
   strip.show();
-  return 200;
 }
+
+void setPixelColor(int pixelNum, uint32_t color) {
+  strip.setPixelColor(pixelNum, color);
+  strip.show();
+}
+
+int handleLightRequest(RestRequest& request) {
+  //if (request.hasJson) {
+    String act = request["action"];
+    Serial.println(act);
+    String json = request["color"];
+    json.replace("%7B", "{");
+    json.replace("%22", "\"");
+    json.replace("%22", "\"");
+    json.replace("%7D", "}");
+    Serial.println(json);
+    DynamicJsonDocument doc(2048);
+    deserializeJson(doc, json);
+    if (fill.equals(act)) {
+      uint32_t color = doc["colors"][0];
+      Serial.println(color);
+      fillWithColor(color);
+      return 200;
+    } else if (pixel.equals(act)) {
+      uint32_t color = doc["colors"][0];
+      int pixelNum = request["pixnum"];
+      setPixelColor(pixelNum, color);
+      return 200;
+    } else if (multi.equals(act)) {
+      String colorsArr = doc["colors"];
+      DynamicJsonDocument clrs(512);
+      deserializeJson(clrs, colorsArr);
+      JsonArray colors = clrs.as<JsonArray>();
+      int colorIdx = 0;
+      int colorsSize = colors.size();
+      for (int pixelIdx=0; pixelIdx<numPixels; pixelIdx++) {
+         if (colorIdx >= colorsSize) {
+           colorIdx = 0; 
+         }
+         JsonVariant vColor = colors[colorIdx];
+         strip.setPixelColor(pixelIdx, vColor.as<uint32_t>());
+         colorIdx++;
+      }
+      strip.show();
+    }
+  //} else {
+   // request.response["errorMsg"] = "Unrecogized request";
+   // return 400;
+  //}
+}
+
+
 
 void setup() {
   Serial.begin(115200);
@@ -137,7 +197,7 @@ void setup() {
 
   //setup neo pixel 
   strip.begin();
-  strip.setBrightness(50);
+  strip.setBrightness(127);
   strip.show();
 
   // have the server collect the content-type header for us
@@ -151,9 +211,12 @@ void setup() {
   restHandler.on("/api/echo/:msg(string|integer)")
     .GET(handleEcho)
     .POST(handleEcho);
-  restHandler.on("/api/light/:pixNum(integer)/set/:red(integer)/:green(integer)/:blue(integer)")
+  restHandler.on("/api/light/:pixnum(integer)/:action(string)/:color(integer|string)")
     .GET(handleLightRequest)
     .POST(handleLightRequest);
+  //restHandler.on("/api/fill/set/:red(integer)/:green(integer)/:blue(integer)")
+  //  .GET(handleFillColorByRGB)
+  //  .POST(handleFillColorByRGB);  
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   while (WiFi.waitForConnectResult() != WL_CONNECTED) {
