@@ -12,7 +12,7 @@ Many folks have static displays, and there isn't anything wrong with that.  I wa
 
 ## What do you need?
 
-From a hardware perspective I used a NodeMCE ESP8266 and some WS2811 string lights.  From the software, I used the ESP8266 libraries, Restfully, and Adafruit_NeoPixel, ArduinoJson, and maybe I'll add MQTT at some point as well(I like the idea of that a little better long term).
+From a hardware perspective I used a NodeMCU ESP8266 and some WS2811 string lights.  From the software, I used the ESP8266 libraries, Restfully, and Adafruit_NeoPixel, ArduinoJson, and maybe I'll add MQTT at some point as well(I like the idea of that a little better long term).
 
 The only things that need configured; light count, pin number, type of lights, hostname, ssid, and password for said ssid.
 
