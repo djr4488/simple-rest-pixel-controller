@@ -16,6 +16,11 @@ const char* password = "YOUR ROUTER PASSWORD";
 const String fill = "fill";
 const String pixel = "pixel";
 const String multi = "multi";
+const String flash = "flash";
+const String chaser = "chaser";
+const String twinkle = "twinkle";
+const String cylon = "cylon";
+const String march = "march";
 const int numPixels = 50;
 
 #ifdef ARDUINO_ARCH_ESP8266
@@ -38,8 +43,13 @@ using WebServer = ESP8266WebServer;
 WebServer server(80);
 RestRequestHandler restHandler;
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(numPixels, 4, NEO_RGB + NEO_KHZ800);
+
+
+//couple of global variables to keep track of some state between cycles(todo: find a better way than global variables to do this)
 bool enableAnimation = false;
 String animation = "NONE";
+bool isDirectionRight = true;
+int headPixel = 0;
 
 /*** Web Server
 */
@@ -229,46 +239,250 @@ DynamicJsonDocument getJsonDocFromRequest(RestRequest& request) {
   return doc;
 }
 
-void fillWithColor(uint32_t color) {
+void fillWithColor(DynamicJsonDocument doc) {
+  enableAnimation = false;
+  animation = "NONE";
+  long color = doc["colors"][0];
+  Serial.println(color);
   strip.fill(strip.gamma32(color), 0, 50);
+  strip.setBrightness(127);
   strip.show();
 }
 
-void setPixelColor(int pixelNum, uint32_t color) {
+void setPixelColor(DynamicJsonDocument doc) {
+  enableAnimation = false;
+  animation = "NONE";
+  uint32_t color = doc["colors"][0];
+  int pixelNum = doc["pixnum"];
   strip.setPixelColor(pixelNum, color);
+  strip.setBrightness(127);
   strip.show();
 }
 
-int handleLightRequest(RestRequest& request) {
+void runMultiFill(DynamicJsonDocument doc) {
+  enableAnimation = false;
+  animation = "NONE";
+  JsonArray colors = doc["colors"].as<JsonArray>();
+  int colorIdx = 0;
+  int colorsSize = colors.size();
+  Serial.print("Color count:");
+  Serial.println(colorsSize);
+  for (int pixelIdx=0; pixelIdx<numPixels; pixelIdx++) {
+    if (colorIdx >= colorsSize) {
+      colorIdx = 0; 
+    }
+    JsonVariant vColor = colors[colorIdx];
+    strip.setPixelColor(pixelIdx, vColor.as<uint32_t>());
+    colorIdx++;
+  }
+  strip.setBrightness(127);
+  strip.show();
+}
+
+void doFlash(DynamicJsonDocument doc) {
+  if (doc["colors"].as<JsonArray>().size() > 1) {
+    runMultiFill(doc);
+  } else {
+    fillWithColor(doc);
+  }
+  enableAnimation = true;
+  animation = doc["animation"].as<String>();
+  runFlash();
+}
+
+void runFlash() {
+  long pixelIdx = random(0, numPixels);
+  long pixelColor = strip.getPixelColor(pixelIdx);
+  Serial.print("pixelIdx:"); 
+  Serial.println(pixelIdx);
+  Serial.print("pixelColor:");
+  Serial.println(pixelColor);
+  strip.setPixelColor(pixelIdx, 0);
+  strip.show();
+  delay(random(200, 600));
+  strip.setPixelColor(pixelIdx, pixelColor);
+  strip.show();
+}
+
+void doChaser(DynamicJsonDocument doc) {
+  if (doc["colors"].as<JsonArray>().size() > 1) {
+    runMultiFill(doc);
+  } else {
+    fillWithColor(doc);
+  }
+  enableAnimation = true;
+  animation = doc["animation"].as<String>();
+}
+
+void runChaser() {
+  enableAnimation = false;
+  int currentPixelColors[numPixels];
+  for (int i = 0; i < numPixels; i++) {
+    if (i == numPixels - 1) {
+      currentPixelColors[0] = strip.getPixelColor(i);
+    } else {
+      currentPixelColors[i+1] = strip.getPixelColor(i);
+    }  
+  }
+  for (int i = 0; i < numPixels; i++) {
+    strip.setPixelColor(i, currentPixelColors[i]);
+  }
+  strip.show();
+  delay(200);
+  enableAnimation = true;
+}
+
+void doCylon(DynamicJsonDocument doc) {
+  //we ignore any colors that are sent and just use red
+  strip.clear();
+  isDirectionRight = true;
+  headPixel = 9;
+  strip.setPixelColor(0,strip.Color(50,0,0));
+  strip.setPixelColor(1,strip.Color(100,0,0));
+  strip.setPixelColor(2,strip.Color(150,0,0));
+  strip.setPixelColor(3,strip.Color(200,0,0));
+  strip.setPixelColor(4,strip.Color(250,0,0));
+  strip.setPixelColor(5,strip.Color(250,0,0));
+  strip.setPixelColor(6,strip.Color(200,0,0));
+  strip.setPixelColor(7,strip.Color(150,0,0));
+  strip.setPixelColor(8,strip.Color(100,0,0));
+  strip.setPixelColor(9,strip.Color(50,0,0));
+  strip.show();
+  enableAnimation = true;
+  animation = cylon;
+}
+
+void runCylon() {
+  bool notFound = true;
+  if (isDirectionRight) {
+    headPixel++;
+    if (headPixel == numPixels) {
+      isDirectionRight = false;
+      headPixel=40;
+    }
+  }  
+  if (!isDirectionRight) {
+    // look from left to right
+    headPixel--;
+    if (headPixel == -1) {
+      isDirectionRight = true;
+      headPixel = 9;
+      
+    }
+  }
+  // move the lights
+  if (isDirectionRight) {
+    int newPixelHead = headPixel;
+    strip.setPixelColor(newPixelHead - 0,strip.Color(50,0,0));
+    strip.setPixelColor(newPixelHead - 1,strip.Color(100,0,0));
+    strip.setPixelColor(newPixelHead - 2,strip.Color(150,0,0));
+    strip.setPixelColor(newPixelHead - 3,strip.Color(200,0,0));
+    strip.setPixelColor(newPixelHead - 4,strip.Color(250,0,0));
+    strip.setPixelColor(newPixelHead - 5,strip.Color(250,0,0));
+    strip.setPixelColor(newPixelHead - 6,strip.Color(200,0,0));
+    strip.setPixelColor(newPixelHead - 7,strip.Color(150,0,0));
+    strip.setPixelColor(newPixelHead - 8,strip.Color(100,0,0));
+    strip.setPixelColor(newPixelHead - 9,strip.Color(50,0,0));
+    strip.setPixelColor(newPixelHead - 10,strip.Color(0,0,0));
+  }
+  if (!isDirectionRight) {
+    int newPixelHead = headPixel;
+    strip.setPixelColor(newPixelHead + 0,strip.Color(50,0,0));
+    strip.setPixelColor(newPixelHead + 1,strip.Color(100,0,0));
+    strip.setPixelColor(newPixelHead + 2,strip.Color(150,0,0));
+    strip.setPixelColor(newPixelHead + 3,strip.Color(200,0,0));
+    strip.setPixelColor(newPixelHead + 4,strip.Color(250,0,0));
+    strip.setPixelColor(newPixelHead + 5,strip.Color(250,0,0));
+    strip.setPixelColor(newPixelHead + 6,strip.Color(200,0,0));
+    strip.setPixelColor(newPixelHead + 7,strip.Color(150,0,0));
+    strip.setPixelColor(newPixelHead + 8,strip.Color(100,0,0));
+    strip.setPixelColor(newPixelHead + 9,strip.Color(50,0,0));
+    strip.setPixelColor(newPixelHead + 10,strip.Color(0,0,0));
+  }
+  strip.show();
+  delay(30);
+}
+
+void doMarch(DynamicJsonDocument doc) {
+  JsonArray colors = doc["colors"].as<JsonArray>();
+  JsonVariant vColor;
+  int colorIdx = 1;
+  for (int i = 0; i < numPixels; i++) {
+    if (i % 5 == 0) {
+      if (colorIdx == 0) {
+        colorIdx = 1;
+        vColor = colors[colorIdx];
+      } else {
+        colorIdx = 0;
+        vColor = colors[colorIdx];
+      }
+    }
+    strip.setPixelColor(i, vColor.as<uint32_t>());
+  }
+  strip.show();
+  enableAnimation = true;
+  animation = march;
+}
+
+void runMarch() {
+  long prevColor = strip.getPixelColor(numPixels - 1);
+  long idxColor;
+  for (int i = 0; i < numPixels; i++) {
+    idxColor = strip.getPixelColor(i);
+    strip.setPixelColor(i, prevColor);
+    prevColor = idxColor;
+  }
+  strip.show();
+  delay(100);
+}
+
+void doTwinkle(DynamicJsonDocument doc) {
+  
+}
+
+void runTwinkle() {
+
+}
+
+void doFade(DynamicJsonDocument doc) {
+
+}
+
+void runFade() {
+
+}
+
+int mapRequestToAction(RestRequest& request) {
   //if (request.hasJson) {
   DynamicJsonDocument doc = getJsonDocFromRequest(request); 
   String act = doc["action"];
   Serial.println(act);
   if (fill.equals(act)) {
-    uint32_t color = doc["colors"][0];
-    Serial.println(color);
-    fillWithColor(color);
+    fillWithColor(doc);
     return 200;
   } else if (pixel.equals(act)) {
-    uint32_t color = doc["colors"][0];
-    int pixelNum = doc["pixnum"];
-    setPixelColor(pixelNum, color);
+    setPixelColor(doc);
     return 200;
   } else if (multi.equals(act)) {
-    JsonArray colors = doc["colors"].as<JsonArray>();
-    int colorIdx = 0;
-    int colorsSize = colors.size();
-    Serial.print("Color count:");
-    Serial.println(colorsSize);
-    for (int pixelIdx=0; pixelIdx<numPixels; pixelIdx++) {
-      if (colorIdx >= colorsSize) {
-        colorIdx = 0; 
-      }
-      JsonVariant vColor = colors[colorIdx];
-      strip.setPixelColor(pixelIdx, vColor.as<uint32_t>());
-      colorIdx++;
-    }
-    strip.show();
+    runMultiFill(doc);
+    return 200;
+  } else if (flash.equals(act)) {
+    doFlash(doc);
+    return 200;  
+  } else if (chaser.equals(act)) {
+    doChaser(doc);
+    return 200;
+  } else if (twinkle.equals(act)) {
+    doTwinkle(doc);
+    return 200; 
+  } else if (cylon.equals(act)) {
+    doCylon(doc); 
+    return 200;
+  } else if (act.equals("pixelState")) {
+    return 200; 
+  } else if (march.equals(act)) {
+    doMarch(doc);
+    return 200; 
   } else {
     request.response["errorMsg"] = "Unrecogized request";
     return 400;
@@ -296,8 +510,8 @@ void setup() {
     .GET(handleEcho)
     .POST(handleEcho);
   restHandler.on("/api/light/:json")
-    .GET(handleLightRequest)
-    .POST(handleLightRequest);
+    .GET(mapRequestToAction)
+    .POST(mapRequestToAction);
   //restHandler.on("/api/fill/set/:red(integer)/:green(integer)/:blue(integer)")
   //  .GET(handleFillColorByRGB)
   //  .POST(handleFillColorByRGB);  
@@ -323,4 +537,17 @@ void loop() {
   // no further processing if we are not in station mode
   if(WiFi.getMode() != WIFI_STA)
     return;
+
+  // no animated action so can quit also
+  if (enableAnimation) {
+    if (animation.equals("flash")) {
+      runFlash();
+    } else if (animation.equals("chaser")) {
+      runChaser();
+    } else if (animation.equals(cylon)) {
+      runCylon();
+    } else if (animation.equals(march)) {
+      runMarch();
+    }
+  } 
 }
