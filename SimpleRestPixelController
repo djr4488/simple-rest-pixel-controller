@@ -21,6 +21,7 @@ const String chaser = "chaser";
 const String twinkle = "twinkle";
 const String cylon = "cylon";
 const String march = "march";
+const String fade = "fade";
 const int numPixels = 50;
 
 #ifdef ARDUINO_ARCH_ESP8266
@@ -44,6 +45,7 @@ WebServer server(80);
 RestRequestHandler restHandler;
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(numPixels, 4, NEO_RGB + NEO_KHZ800);
 
+bool isPixelDimming[numPixels];
 
 //couple of global variables to keep track of some state between cycles(todo: find a better way than global variables to do this)
 bool enableAnimation = false;
@@ -227,13 +229,137 @@ unsigned char h2int(char c)
     return(0);
 }
 
+//conversions from stackoverflow: https://stackoverflow.com/questions/3018313/algorithm-to-convert-rgb-to-hsv-and-hsv-to-rgb-in-range-0-255-for-both
+typedef struct {
+    double r;       // a fraction between 0 and 1
+    double g;       // a fraction between 0 and 1
+    double b;       // a fraction between 0 and 1
+} rgb;
+
+typedef struct {
+    double h;       // angle in degrees
+    double s;       // a fraction between 0 and 1
+    double v;       // a fraction between 0 and 1
+} hsv;
+
+static hsv   rgb2hsv(rgb in);
+static rgb   hsv2rgb(hsv in);
+static hsv   intToHsv(uint32_t color);
+
+hsv rgb2hsv(rgb in)
+{
+    hsv         out;
+    double      min, max, delta;
+
+    min = in.r < in.g ? in.r : in.g;
+    min = min  < in.b ? min  : in.b;
+
+    max = in.r > in.g ? in.r : in.g;
+    max = max  > in.b ? max  : in.b;
+
+    out.v = max;                                // v
+    delta = max - min;
+    if (delta < 0.00001)
+    {
+        out.s = 0;
+        out.h = 0; // undefined, maybe nan?
+        return out;
+    }
+    if( max > 0.0 ) { // NOTE: if Max is == 0, this divide would cause a crash
+        out.s = (delta / max);                  // s
+    } else {
+        // if max is 0, then r = g = b = 0              
+        // s = 0, h is undefined
+        out.s = 0.0;
+        out.h = NAN;                            // its now undefined
+        return out;
+    }
+    if( in.r >= max )                           // > is bogus, just keeps compilor happy
+        out.h = ( in.g - in.b ) / delta;        // between yellow & magenta
+    else
+    if( in.g >= max )
+        out.h = 2.0 + ( in.b - in.r ) / delta;  // between cyan & yellow
+    else
+        out.h = 4.0 + ( in.r - in.g ) / delta;  // between magenta & cyan
+
+    out.h *= 60.0;                              // degrees
+
+    if( out.h < 0.0 )
+        out.h += 360.0;
+
+    return out;
+}
+
+
+rgb hsv2rgb(hsv in)
+{
+    double      hh, p, q, t, ff;
+    long        i;
+    rgb         out;
+
+    if(in.s <= 0.0) {       // < is bogus, just shuts up warnings
+        out.r = in.v;
+        out.g = in.v;
+        out.b = in.v;
+        return out;
+    }
+    hh = in.h;
+    if(hh >= 360.0) hh = 0.0;
+    hh /= 60.0;
+    i = (long)hh;
+    ff = hh - i;
+    p = in.v * (1.0 - in.s);
+    q = in.v * (1.0 - (in.s * ff));
+    t = in.v * (1.0 - (in.s * (1.0 - ff)));
+
+    switch(i) {
+    case 0:
+        out.r = in.v;
+        out.g = t;
+        out.b = p;
+        break;
+    case 1:
+        out.r = q;
+        out.g = in.v;
+        out.b = p;
+        break;
+    case 2:
+        out.r = p;
+        out.g = in.v;
+        out.b = t;
+        break;
+
+    case 3:
+        out.r = p;
+        out.g = q;
+        out.b = in.v;
+        break;
+    case 4:
+        out.r = t;
+        out.g = p;
+        out.b = in.v;
+        break;
+    case 5:
+    default:
+        out.r = in.v;
+        out.g = p;
+        out.b = q;
+        break;
+    }
+    return out;     
+}
+
+hsv intToHsv(uint32_t color) {
+  rgb out;
+  out.b = (color & 255) / 255.0;
+  out.g = ((color >> 8) & 255) / 255.0;
+  out.r = ((color >> 16) & 255) / 255.0;
+  return rgb2hsv(out);
+}
+
 DynamicJsonDocument getJsonDocFromRequest(RestRequest& request) {
   String encoded = request["json"];
-  Serial.print("encoded: ");
-  Serial.println(encoded);
   String json = urldecode(request["json"]);
-  Serial.print("json: ");
-  Serial.println(json);
   DynamicJsonDocument doc(2048);
   deserializeJson(doc, json);
   return doc;
@@ -243,7 +369,6 @@ void fillWithColor(DynamicJsonDocument doc) {
   enableAnimation = false;
   animation = "NONE";
   long color = doc["colors"][0];
-  Serial.println(color);
   strip.fill(strip.gamma32(color), 0, 50);
   strip.setBrightness(127);
   strip.show();
@@ -265,8 +390,6 @@ void runMultiFill(DynamicJsonDocument doc) {
   JsonArray colors = doc["colors"].as<JsonArray>();
   int colorIdx = 0;
   int colorsSize = colors.size();
-  Serial.print("Color count:");
-  Serial.println(colorsSize);
   for (int pixelIdx=0; pixelIdx<numPixels; pixelIdx++) {
     if (colorIdx >= colorsSize) {
       colorIdx = 0; 
@@ -293,10 +416,6 @@ void doFlash(DynamicJsonDocument doc) {
 void runFlash() {
   long pixelIdx = random(0, numPixels);
   long pixelColor = strip.getPixelColor(pixelIdx);
-  Serial.print("pixelIdx:"); 
-  Serial.println(pixelIdx);
-  Serial.print("pixelColor:");
-  Serial.println(pixelColor);
   strip.setPixelColor(pixelIdx, 0);
   strip.show();
   delay(random(200, 600));
@@ -445,18 +564,63 @@ void runTwinkle() {
 }
 
 void doFade(DynamicJsonDocument doc) {
-
+  JsonArray colors = doc["colors"].as<JsonArray>();
+  int colorIdx = 0;
+  int colorsSize = colors.size();
+  for (int pixelIdx=0; pixelIdx<numPixels; pixelIdx++) {
+    if (colorIdx >= colorsSize) {
+      colorIdx = 0; 
+    }
+    JsonVariant vColor = colors[colorIdx];
+    hsv hSV = intToHsv(vColor.as<uint32_t>());
+    if (random(0, 2) == 0) {
+      isPixelDimming[pixelIdx] = false;
+    } else {
+      isPixelDimming[pixelIdx] = true;
+    }
+    hSV.v = hSV.v * ((((random(1, 9) + 1) / 10.0)));
+    rgb rGB = hsv2rgb(hSV);
+    uint32_t clr = strip.Color(rGB.r * 255.0, rGB.g * 255.0, rGB.b * 255.0);
+    strip.setPixelColor(pixelIdx, strip.gamma32(clr));
+    colorIdx++;
+  }
+  strip.setBrightness(127);
+  strip.show();
+  enableAnimation = true;
+  animation = fade;
 }
 
 void runFade() {
-
+  for (int pixelIdx = 0; pixelIdx < numPixels; pixelIdx++) {
+    uint32_t color = strip.getPixelColor(pixelIdx);
+    hsv hSV = intToHsv(color);
+    if (isPixelDimming[pixelIdx]) {
+      if (hSV.v <= 0.2) {
+        isPixelDimming[pixelIdx] = false;
+        hSV.v = hSV.v + .02;
+      } else {
+        hSV.v = hSV.v - .02;
+      }
+    } else {
+      if (hSV.v >= 0.9) {
+        isPixelDimming[pixelIdx] = true;
+        hSV.v = hSV.v - .02; 
+      } else {
+        hSV.v = hSV.v + .02;
+      }
+    }
+    rgb rGB = hsv2rgb(hSV);
+    color = strip.Color(rGB.r * 255.0, rGB.g * 255.0, rGB.b * 255.0);
+    strip.setPixelColor(pixelIdx, color);
+  }
+  strip.show();
+  delay(25);
 }
 
 int mapRequestToAction(RestRequest& request) {
   //if (request.hasJson) {
   DynamicJsonDocument doc = getJsonDocFromRequest(request); 
   String act = doc["action"];
-  Serial.println(act);
   if (fill.equals(act)) {
     fillWithColor(doc);
     return 200;
@@ -483,6 +647,9 @@ int mapRequestToAction(RestRequest& request) {
   } else if (march.equals(act)) {
     doMarch(doc);
     return 200; 
+  } else if (fade.equals(act)) {
+    doFade(doc);
+    return 200;
   } else {
     request.response["errorMsg"] = "Unrecogized request";
     return 400;
@@ -548,6 +715,8 @@ void loop() {
       runCylon();
     } else if (animation.equals(march)) {
       runMarch();
+    } else if (animation.equals(fade)) {
+      runFade();
     }
   } 
 }
